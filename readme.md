@@ -1,6 +1,6 @@
 # Canvas Data 2 (DAP) data loading scripts
 
-This project includes 2 scripts which handle snapshot and incremental retrievals of Canvas Data 2 respectively. Files are being downloaded locally to a configured base folder. Each run of the snapshots retrieval script creates a new subfolder named 'snapshots-<timestamp>', while runs of the incrementals retrieval script create a subfolder named 'incrementals-<timestamp>'. The Incrementals script includes logic for finding the most recent file/s retrieved in previous runs for each particular table (it traverses folders previously created as it searches), extracting the timestamp of those files, and using those timestamps as the 'since' value in the next incremental retrieval of each table.  
+This project includes 2 scripts which handle snapshot and incremental retrievals of Canvas Data 2 respectively. Files are being downloaded locally to a configured base folder. Each run of the snapshots retrieval script creates a new subfolder named 'snapshots-\<timestamp\>', while runs of the incrementals retrieval script create a subfolder named 'incrementals-\<timestamp\>'. The Incrementals script includes logic for finding the most recent file/s retrieved in previous runs for each particular table (it traverses folders previously created as it searches), extracting the timestamp of those files, and using those timestamps as the 'since' value in the next incremental retrieval of each table.  
 
 ## Installation
 Type:
