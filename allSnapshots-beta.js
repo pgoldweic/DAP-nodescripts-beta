@@ -52,9 +52,11 @@ const obtainAuth = async (authEndpoint, authData, complete) =>  {
 		const response =  await axios({
 			method: 'POST',
 			url: authEndpoint,
-			data: querystring.stringify(authData)
-			, headers: {"Content-Type": "application/x-www-form-urlencoded", "Authorization": "Basic " + 
-				process.env.CD2ApiKey} // 12/7/22
+			auth: { username: process.env.CD2ClientID, password: process.env.CD2Secret}, // 5/5/23
+			data: querystring.stringify(authData), 
+			// 5/5/23 headers: {"Content-Type": "application/x-www-form-urlencoded", "Authorization": "Basic " + 
+			// 5/5/23 process.env.CD2ApiKey} // 12/7/22
+			headers: {"Content-Type": "application/x-www-form-urlencoded"} // 5/5/23
 		})
 		//console.log("Obtained response from Axios: ", response)
 		//console.log("Obtained response from Axios with .json form: ", response.json())

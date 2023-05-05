@@ -9,7 +9,7 @@ Type:
 
 ## Configuration
 Copy the .env.example file into your own .env file and update contents with appropriate values for your institution.
-At the least, you should insert your CD2 api key value as the value for  'CD2ApiKey' in this file. All other parameters are optional. The following are default values for those parameters:
+At the least, you should insert your CD2 client ID and secret as the values for 'CD2ClientID' and 'CD2Secret' in this file. All other parameters are optional. The following are default values for those parameters:
 
     - sleepMilliseconds: 10000 (number of milliseconds to wait while polling for job status)
     - maxSimultaneousQueries = 10 (controls the number of retrieval jobs -one per table- that are created simultaneously. The next batch of jobs will not be created until the running batch has finished downloading).
