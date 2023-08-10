@@ -538,7 +538,7 @@ const createTimestampString = (date) => {
 	if (!date) {
 		date = new Date()
 	}
-	return date.toISOString().replaceAll(":","-").replaceAll(".","-")
+	return date.toISOString().replace(/:/g, "-").replace(/\./g, "-");
 }
 
 /** Ensures that a (local) directory exists and creates one when it does not
