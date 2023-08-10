@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({path: __dirname + '/.env'});
 
 const base_URL = process.env.dap_URL
 const dap_URL = base_URL + "/dap"
