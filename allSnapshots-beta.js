@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({path: __dirname + '/.env'});
 
 const base_URL = process.env.dap_URL
 const dap_URL = base_URL + "/dap"
@@ -309,7 +309,7 @@ const downloadAllData = async (urls, table, at, folderName, schema_version) => {
 async function downloadFile (url, targetFile) {  
 	  return await new Promise((resolve, reject) => {
 	    Https.get(url, response => {
-	      const code = response.statusCode ?? 0
+	      const code = response.statusCode || 0
 
 	      if (code >= 400) {
 	        return reject(new Error(response.statusMessage))
@@ -538,7 +538,8 @@ const createTimestampString = (date) => {
 	if (!date) {
 		date = new Date()
 	}
-	return date.toISOString().replaceAll(":","-").replaceAll(".","-")
+	// return date.toISOString().replaceAll(":","-").replaceAll(".","-")
+	return date.toISOString().replace(/:/g, "-").replace(/\./g, "-")
 }
 
 /** Ensures that a (local) directory exists and creates one when it does not
