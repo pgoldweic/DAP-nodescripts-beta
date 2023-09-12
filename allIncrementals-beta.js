@@ -1,4 +1,5 @@
-require('dotenv').config();
+// require('dotenv').config();
+require('dotenv').config({path: __dirname + '/.env'});
 
 const base_URL = process.env.dap_URL
 const dap_URL = base_URL + "/dap"
@@ -244,7 +245,8 @@ const downloadAllData = async (urls, table, at, folderName, schema_version) => {
 	// Ensure folder exists
 	ensureDirExists(folderName)
 	// Download Data to the specified folder
-	at = at.replaceAll(':','-')
+	// 9/11/23 at = at.replaceAll(':','-')
+	at = at.replace(/:/g, "-")
 	console.log("Will download all incremental data as of: " + at + " for table: " + table + " into folder: " + folderName + " for schema version: ", schema_version)
 	let allPromises = []
 	for (let objectId in urls) {
@@ -324,8 +326,6 @@ async function downloadFile (url, targetFile) {
 	    })
 	  })
 	}
-
-
 
 function delay(time) {
 	  return new Promise(resolve => setTimeout(() => resolve(true), time));
@@ -418,70 +418,9 @@ const retrieveTablesSchema = () => {
 	return schema
 }
 
-/** Retrieves incrementally a subset of tables given by an array of table names
+/** Partitions an array into groups of maxElements each
  * 
- * <p> For each table, it figures out the last update time for that table -that is, 'current as of time'- 
- * from the filename of the most recently retrieved table file, and uses it as the 'since' value for 
- * a new incremental retrieval job for that table. </p>
  */
-const retrieveIncrementalTableSubsetOLD = async(tablesList, folderName, until)=> {
-	console.log("Will try to retrieve incremental updates for the following tables... ", tablesList)
-	let table
-	let errored
-	let retrieved
-	let promises = []
-	// TODO: if until is undefined, consider setting up a reasonable time for it here
-	try {
-		for (let i=0; i < tablesList.length; i++) {
-			table = tablesList[i]
-			// find most recent file representing an update to this table
-			let recentUpdate = await findLastTableUpdate(table, folderName)
-			// parse file name to obtain tokens, including the timestamp of the latest table update
-			if (recentUpdate) {
-				let fileParts = parseFileName(recentUpdate)
-				let since = undefined
-				if (fileParts.at) {
-					let timestamp = fileParts.at
-					let timeparts = timestamp.split("T")
-					if (timeparts.length === 2) {
-						let date = timeparts[0]
-						let time = timeparts[1]
-						since = date + "T" + time.replace("-",":")
-					}
-				}
-				promises.push(retrieveCompleteTable(table, since, until, folderName))
-			} else {// this table needs to be retrieved for the first time --> use a snapshot
-				promises.push(retrieveCompleteTable(table, undefined, until, folderName))
-			}
-		}
-	} catch (error) {
-		console.log("Uncaught top level Error while finding the most updated file for table: " + table + 
-				"- terminating incremental script!: ", error)
-		console.error(error, error.stack)
-	}
-	try {
-		let responses = await Promise.all(promises)
-		if (responses) {
-			
-			console.log("Looks like I've finished retrieving all the tables in the input set!")
-			let errors = responses.filter(response => response && response.error && response.table)
-			if (errors && errors.length > 0) {
-				console.log(errors.length + " errors have occurred during table retrieval as follows: ", errors )
-			} else {
-				console.log("Yay! all retrievals were successful for all tables in the set!")
-			}
-			errored = errors.map(errorResponse => errorResponse.table)
-			retrieved = tablesList.filter(tableName => 
-				!(errored && errored.length > 0 && errored.includes(tableName)))
-			console.log("The following tables were successfully retrieved: ", retrieved)
-		}
-	} catch(error) {
-		// NOTE: this should never happen, as each retrieval does NOT throw exceptions
-		console.log("Uncaught top level Error - terminating incremental script!: ", error)
-		console.error(error, error.stack)
-	}
-}
-
 const partitionArrayIntoGroups = (inputArray, maxElements) => {
 	let result = []
 	let currentList = []
@@ -501,8 +440,11 @@ const partitionArrayIntoGroups = (inputArray, maxElements) => {
 	return result
 }
 
-/** Retrieves (incrementally) a subset of tables given by an array of table names
+/** Retrieves incrementally a subset of tables given by an array of table names
  * 
+ * <p> For each table, it figures out the last update time for that table -that is, 'current as of time'- 
+ * from the filename of the most recently retrieved table file, and uses it as the 'since' value for 
+ * a new incremental retrieval job for that table. </p>
  */
 const retrieveIncrementalTableSubset = async(tablesList, folderName, until)=> {
 	console.log("Starting incremental retrievals onto folder: " + folderName + " for the following tables... ", tablesList)
@@ -596,8 +538,8 @@ const createTimestampString = (date) => {
 	if (!date) {
 		date = new Date()
 	}
-	//return date.toISOString().split('T')[0]
-	return date.toISOString().replaceAll(":","-").replaceAll(".","-")
+	// 9/11/23 Note: replaceAll requires node > 15  return date.toISOString().replaceAll(":","-").replaceAll(".","-") 
+	return date.toISOString().replace(/:/g, "-").replace(/\./g, "-");
 }
 
 /** Ensures that a (local) directory exists (creates it when it does not)
@@ -788,6 +730,64 @@ const findLastTableUpdate = async (table, folderName)=> {
 		return result
 	}
 }
+
+/* Version of the above function that works in node versions < 10 (e.g. Splunk's built-in node support is for version 8!):
+const findLastTableUpdate = async (table, folderName)=> {
+	// 1- Find snapshot AND increm folders that are direct children of the current folder 
+	// (with the exception of 'excludeFolderName")
+	// 2- in this folder, find the file/s that corresponds to the table given, and take the most recent one
+	// 3- return filename just found.
+	// 4- if no match for the file in a particular folder, switch to the next folder in the listing until 
+	// a file matching the table is found, and return it.
+	let parentFolderPath  = path.dirname(folderName)
+	let folderNameProper = folderName.substr(parentFolderPath.length)
+	console.log("Will be looking for the last table update to " + table + " underneath folder: ", parentFolderPath)
+	// 9/1/23 TESTING for node 14 let  dirEntries = await fs.readdir(parentFolderPath, { withFileTypes: true });
+	let  dirEntries = Fs.readdirSync(parentFolderPath);
+	// 9/5/23 let onlyRelevantDirs = dirEntries.filter(de => de.isDirectory() && de.name !== folderName && 
+	//		(de.name.indexOf("snapshot_") == 0 || de.name.indexOf("incremental_") == 0)) // 1/10/23 updated - check it out!!! 
+	let onlyRelevantDirs = dirEntries.filter(de => de && de.length > 9 && de !== folderName && (de.indexOf("snapshot_") === 0 || de.indexOf("incremental_") === 0))
+	//console.log("There are " + onlyRelevantDirs.length + " relevant directories I'll explore: ", onlyRelevantDirs)
+	console.log("There are " + onlyRelevantDirs.length + " relevant directories I'll explore... ")
+	let tableNameLength = table ? table.length : 0
+	// 2- order these folders starting from the most recent one
+	// 9/5/23 onlyRelevantDirs = sortArray(onlyRelevantDirs, item => {return parseFolderName(item.name).timestamp}, "desc")
+	onlyRelevantDirs = sortArray(onlyRelevantDirs, item => {return parseFolderName(item).timestamp}, "desc")
+	let currentFolderIndex = 0
+	let done = false
+	let result
+	if (onlyRelevantDirs && onlyRelevantDirs.length > 0) {
+		while (!done) {// iteratively look for a file in the folders in order
+			let currentFolder = onlyRelevantDirs.length > 0 ? onlyRelevantDirs[currentFolderIndex] : undefined
+			//console.log("Currently inspecting folder: ", currentFolder)
+			if (currentFolder) {
+				// 9/4/23 let currentCandidateFiles= listFilesInDir(parentFolderPath + "/" + currentFolder.name)
+				let currentCandidateFiles= listFilesInDir(parentFolderPath + "/" + currentFolder)
+				currentCandidateFiles = currentCandidateFiles.filter(filename => filename.length > tableNameLength && 
+						filename.substring(0, tableNameLength) === table) // only files matching the table remain
+				//console.log("The current candidate file names will be inspected...", currentCandidateFiles)
+				// order the candidate files with most recent on top
+				currentCandidateFiles = currentCandidateFiles.sort (function (x, y) {
+					return comparisonFunction(x, y)*(-1)})
+				//console.log("The current candidate file names were sorted as: ", currentCandidateFiles)
+				if (currentCandidateFiles && currentCandidateFiles.length > 0) {
+					result = currentCandidateFiles[0]
+					done = true
+				} else {// no candidate file in this folder -->  use next folder
+					currentFolderIndex++
+					if (currentFolderIndex >= onlyRelevantDirs.length) {
+						done = true
+					}
+				}
+			} else {// no existing file was found for the given table
+				done = true
+			}
+		}
+		console.log("The last table update for table: " + table + " was: ", result)
+		return result
+	}
+}
+ */
 
 /* Create a folder for the script's output and run it 
  * 
