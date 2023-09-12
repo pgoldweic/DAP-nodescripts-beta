@@ -39,6 +39,8 @@ var currentlyValidTokenResponse
 const defaultTopFolder = process.env.topFolder || "."
 console.log("Top folder for file storage is: ", defaultTopFolder)
 
+var tableAttempts = {}
+
 /** Returns an authentication token using authData as parameters to the request
  * 
  * <p> if 'complete' is true, then the function returns an object with format { access_token: blah, expires_at: blah }. 
@@ -46,13 +48,19 @@ console.log("Top folder for file storage is: ", defaultTopFolder)
  * 
  * <p> As of 12/20/22, we augment the response of the Auth service with an 'expires_at' field. Note however that the
  * expires_at value can also be obtained from the token itself when decoding it (see ensureValidToken below).</p>
+ * 
+ * <p> Now utilizing client ID and secret instead of the unique API key value. Also, using Axios' own 'auth' config 
+ * parameter to pass on these two values for automatic inclusion in the Authorization header as:
+ * "Basic <base64-encoded CLIENT_ID:SECRET>" NOTE: ChatGPT was used to suggest this shortcut. </p>
  */
 const obtainAuth = async (authEndpoint, authData, complete) =>  {
+	let clientId = process.env.CD2ClientID
+	let clientSecret = process.env.CD2Secret
 	try {
 		const response =  await axios({
 			method: 'POST',
 			url: authEndpoint,
-			auth: { username: process.env.CD2ClientID, password: process.env.CD2Secret}, // 5/5/23
+			auth: { username: clientId, password: clientSecret}, // 5/5/23
 			data: querystring.stringify(authData), 
 			// 5/5/23 headers: {"Content-Type": "application/x-www-form-urlencoded", "Authorization": "Basic " + 
 			// 5/5/23 process.env.CD2ApiKey} // 12/7/22
@@ -257,7 +265,8 @@ const downloadAllData = async (urls, table, at, folderName, schema_version) => {
 	// Ensure folder exists
 	ensureDirExists(folderName)
 	// Download Data to the specified folder
-	at = at.replaceAll(':','-')
+	// 8/31/23 (for older versions of node) at = at.replaceAll(':','-')
+	at = at.replace(/:/g, "-")
 	console.log("Will download table data retrieved as of: ", at + " for table: " + table + " into folder: "+ folderName + " for schema version: ", schema_version)
 	let allPromises = []
 	let pathname
@@ -289,6 +298,8 @@ const downloadAllData = async (urls, table, at, folderName, schema_version) => {
 		} catch (error) {
 			console.log("Error creating download promise for object: " + objectId, error)
 			console.error(error)
+			// 9/11/23 now rethrowing
+			throw error
 		}
 	}
 	console.log("Prepared " + allPromises.length + " download promises for table: ", table)
@@ -297,6 +308,8 @@ const downloadAllData = async (urls, table, at, folderName, schema_version) => {
 	} catch (error) {
 		console.log("Error downloading file/s!", error)
 		console.error(error, error.stack)
+		// 9/11/23 now rethrowing
+		throw error
 	}
 }
 
@@ -348,10 +361,19 @@ function delay(time) {
 /** Fully retrieves a given table and downloads it onto one or more files on the local disk
  * 
  */
-const retrieveCompleteTable = async(table, folderName) => {
+const retrieveCompleteTable = async(table, folderName, tableAttempts) => {
 	console.log("Getting started with retrieval of data for table: " + table + " into folder: " + folderName)		
 	let monitoringData
 	let result
+	if (!tableAttempts) tableAttempts = {}
+	// 7/7/23 Record table attempt starting
+	try {
+		tableAttempts[table] = tableAttempts[table] && tableAttempts[table] >=0 ? tableAttempts[table] + 1 : 1
+	} catch (error) {
+		console.error(error, error.stack)
+		console.log("Error while trying to read attempts for table: " + table + "! Setting attempts to 1...")
+		tableAttempts[table] = 1
+	}
 	try {
 		let authResponse = currentlyValidToken ? 
 					await ensureValidToken(currentlyValidToken) : 
@@ -424,7 +446,7 @@ const retrieveTablesSchema = () => {
 /** Retrieves a subset of tables given by an array of table names and a folder path
  * 
  */
-const retrieveTableSubset = async(tablesList, folderName)=> {
+const retrieveTableSubset = async(tablesList, folderName, tableAttempts)=> {
 	console.log("Will try to retrieve the following table subset... ", tablesList)
 	let table
 	let errored
@@ -436,8 +458,6 @@ const retrieveTableSubset = async(tablesList, folderName)=> {
 	//let partitionedPromises = partitionArrayIntoGroups(promises, maxSimultaneousQueries)
 	console.log("A table subset retrieval was partitioned into " + partitionedTables.length + " groups")
 	// Submit each of the partitioned promise groups in sequence
-	// let promiseGroupIndex = 0
-	// let done = false
 	if (partitionedTables.length > 0) {
 		//while (!done) { 
 		for (let promiseGroupIndex = 0; promiseGroupIndex < partitionedTables.length; promiseGroupIndex++) {
@@ -446,7 +466,7 @@ const retrieveTableSubset = async(tablesList, folderName)=> {
 				console.log("Partition retrieval iteration now starts for group: ", promiseGroupIndex)
 				//console.log("Will try to retrieve all tables in partition group: " + promiseGroupIndex)
 				console.log("Tables in this subgroup are: ", partitionedTables[promiseGroupIndex])
-				let responses = await Promise.all(partitionedTables[promiseGroupIndex].map(table => retrieveCompleteTable(table, folderName)))
+				let responses = await Promise.all(partitionedTables[promiseGroupIndex].map(table => retrieveCompleteTable(table, folderName, tableAttempts)))
 				while (!responses) {
 					await delay(sleepMs)
 				} 
@@ -460,50 +480,33 @@ const retrieveTableSubset = async(tablesList, folderName)=> {
 						console.log("Yay! all subgroup retrievals were successful in group: ", promiseGroupIndex)
 					}
 					errored = errors.map(errorResponse => errorResponse.table)
-					if (errored.length > 0) allFailedRetrievals.push(errored)
+					if (errored.length > 0) {
+						// 7/7/23 allFailedRetrievals.push(errored)
+						allFailedRetrievals = allFailedRetrievals.concat(errored)
+					}
 					retrieved = partitionedTables[promiseGroupIndex].filter(tableName => 
 						!(errored && errored.length > 0 && errored.includes(tableName)))
 					console.log("The following tables in group " + promiseGroupIndex + " were successfully retrieved: ", retrieved)
-					if (retrieved.length > 0) allSuccessfulRetrievals.push(retrieved)
+					if (retrieved.length > 0) {
+						// 7/7/23 allSuccessfulRetrievals.push(retrieved)
+						allSuccessfulRetrievals = allSuccessfulRetrievals.concat(retrieved)
+					}
 					
 				} 
 			} catch(error) {
 				console.log("Uncaught top level Error - terminating script!: ", error)
 				console.error(error, error.stack)
-				/* promiseGroupIndex++
-					if (promiseGroupIndex === partitionedPromises.length) {// we are done
-						done = true
-					}
-				*/
 				continue
 			}
 		console.log("Partition retrieval iteration ends... should next retrieve group: ", promiseGroupIndex + 1)
 		}
 	}
-	/* old code does all of them simultaneously
-	try {
-		let responses = await Promise.all(promises)
-		if (responses) {
-			console.log("Looks like I've finished retrieving all the tables in the input set!")
-			let errors = responses.filter(response => response && response.error && response.table)
-			if (errors && errors.length > 0) {
-				console.log(errors.length + " errors have occurred as follows: ", errors )
-			} else {
-				console.log("Yay! all retrievals were successful!")
-			}
-			errored = errors.map(errorResponse => errorResponse.table)
-			retrieved = tablesList.filter(tableName => 
-				!(errored && errored.length > 0 && errored.includes(tableName)))
-			console.log("The following tables were successfully retrieved: ", retrieved)
-		}
-	} catch(error) {
-		console.log("Uncaught top level Error - terminating script!: ", error)
-		console.error(error, error.stack)
-	}
-	*/
+	
 	console.log("Snapshot table subset retrieval has ended!")
 	console.log("The following tables in this set were successfully retrieved: ", allSuccessfulRetrievals)
 	console.log(allFailedRetrievals.length + " errors have occurred as follows: ", allFailedRetrievals )
+	// 7/7/23 TODO: retry all failed retrievals up to a configured number of times
+	return { successes: allSuccessfulRetrievals, failures: allFailedRetrievals}
 	
 }
 
@@ -538,8 +541,8 @@ const createTimestampString = (date) => {
 	if (!date) {
 		date = new Date()
 	}
-	// return date.toISOString().replaceAll(":","-").replaceAll(".","-")
-	return date.toISOString().replace(/:/g, "-").replace(/\./g, "-")
+	// Note: replaceAll requires node > 15  return date.toISOString().replaceAll(":","-").replaceAll(".","-") 
+	return date.toISOString().replace(/:/g, "-").replace(/\./g, "-");
 }
 
 /** Ensures that a (local) directory exists and creates one when it does not
@@ -623,7 +626,7 @@ const retrieveTableSchema = async (table, authResponse) => {
 	}
 }
 
-/** Retrieves all tables in the table schema read from a local file  (NOT USED ANYMORE)
+/** Retrieves all tables obtained via the table listing endpoint
  * 
  */
 const retrieveAllTables = async (folderName) => {
@@ -639,18 +642,71 @@ const retrieveAllTables = async (folderName) => {
 			console.log("Error: Uncaught exception at the top script level - terminating full table retrieval script", error)
 		}
 	}
-	// 11/18/22 return await retrieveTableSubset(allTables, folderName)
 }
 
-/* Creates a folder for the script's output and runs it 
+/** 7/7/23 Same as above but more robust as it retries failed retrieval attempts up to 3 times
+ * 
+ */
+const retrieveAllTablesWithRetrials = async (folderName, tableAttempts) => {
+	const authResponse = await obtainAuth(authEndpoint, authData)
+	let allFailures = []
+	let allSuccesses = []
+	if (authResponse) {
+		try {
+			let allTables = await retrieveTableListing(authResponse)
+			if (allTables) {
+				while (allTables.length > 0 ) {
+					let results = await retrieveTableSubset(allTables, folderName, tableAttempts)
+					while (!results) {
+						await delay(sleepMs)
+					} 
+					if (results && results.successes && results.failures) {// retrieval fully completed
+						if (results.failures.length > 0) {
+							console.log("Will retry retrieval of tables for those who have failed: ", results.failures)
+							let newSubset = []
+							for (let index=0; index < results.failures.length; index++) {
+								// check whether retry is allowed and add it to new subset
+								let table = results.failures[index]
+								if (tableAttempts[table] < 3) {
+									console.log("Retrieval of: " + table + " will be retried... current attempts: ", tableAttempts[table])
+									newSubset.push(table)
+								} else {
+									allFailures.push(table)
+									console.log("Warning!! Retrieval of table: " + table + " will NOT be retried anymore!...")
+								}
+							}
+							allTables = newSubset
+						} else {// we are done
+							allTables = []
+							allSuccesses = allSuccesses.concat(results.successes)
+						}
+					}
+				}
+				// Nothing else to retrieve
+				console.log("Fully completed table retrievals script!!")
+				console.log("Total successes were as follows: ", allSuccesses)
+				console.log("Total failures are as follows: ", allFailures)
+				console.log("Table attemps were as follows: ", tableAttempts)
+			}
+		} catch (error) {
+			console.error(error, error.stack)
+			console.log("Error: Uncaught exception at the top script level - terminating full table retrieval script", error)
+		}
+	}
+}
+
+
+/* Creates a folder for the script's output and runs the script
  * 
  */
 
 const folderName = defaultTopFolder + "/" + "snapshot_" + createTimestampString()
 ensureDirExists(folderName)
+
 // Here's an example of how to retrieve a table subset
 // retrieveTableSubset( ['accounts', 'wiki_pages'], folderName)
 
 // Use this to retrieve all tables
-retrieveAllTables(folderName)
+//retrieveAllTables(folderName)
+retrieveAllTablesWithRetrials(folderName, tableAttempts)
 
